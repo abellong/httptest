@@ -9,13 +9,13 @@ LDFLAGS =	$(SYSV_LIBS)
 all:		httptest
 
 httptest:	httptest.o timers.o
-	$(CC) $(CFLAGS) httptest.o timers.o $(LDFLAGS) -o httptest
+	$(CC) -g $(CFLAGS) httptest.o timers.o $(LDFLAGS) -o httptest
 
-httptest.o:	httptest.c timers.h port.h
-	$(CC) $(CFLAGS) -c httptest.c
+httptest.o:	httptest.c timers.h
+	$(CC) -g $(CFLAGS) -c httptest.c
 
 timers.o:	timers.c timers.h
-	$(CC) $(CFLAGS) -c timers.c
+	$(CC) -g $(CFLAGS) -c timers.c
 
 install:	all
 	rm -f $(BINDIR)/httptest

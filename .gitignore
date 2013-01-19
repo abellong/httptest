@@ -1,3 +1,5 @@
 httptest
 *~
 *.temp
+*.core
+*.o
