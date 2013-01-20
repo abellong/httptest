@@ -95,7 +95,7 @@ int main( int argc, char *argv[])
 
     /* Initialize the connections table */
     max_conns = 512 - RESERVED_FDS;
-    connections = (connection *) malloc(max_conns * sizeof(connections));
+    connections = (connection *) malloc(max_conns * sizeof(connection));
     for (cnum = 0; cnum < max_conns; cnum++)
         connections[cnum].conn_state = CNST_FREE;
 
