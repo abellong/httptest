@@ -1,4 +1,5 @@
-#include <stdio.h>
+#include <ncurses.h>
+#include <panel.h>
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
@@ -45,21 +46,31 @@ typedef struct {
 /* How often to show connection rate  */
 #define RATE_SHOW_SECS 5
 
+#define INFO_MODE 1
+#define EDIT_MODE 0
+#define NLINES 22
+#define NCOLS 76
+
 /* max_conns: maximum number of conn at any point */
 /* cur_conns: number of conn kept currently */
 /* max_para: maximum number of conns in fact  */
+static int rate;
 static connection* connections; /* need free */
 static int max_conns, cur_conns, max_para;
 static int total_conns_start, total_conns_start_old;
 static int failed_conns, succeeded_conns;
 static url* urls;               /* need free */
-static char headcmd[100];
 static long start_interval;     /* connect frequency */
 static int maxfd;               /* highest-numbered file descriptor */
+static WINDOW *info_win, *edit_win;
+static PANEL  *info_panel, *edit_panel;
+static int mode;
 
 static void sig_handler(int sig);
 static void usage();
 static void read_url_file(char* url_file);
+static void init_wins();
+static void win_show(WINDOW *win, char *label);
 static void start_connection(struct timeval *nowP);
 static void start_socket(int cnum, struct timeval *nowP);
 static void handle_connect(int cnum, struct timeval *nowP, int double_check);
@@ -70,7 +81,7 @@ static void show_conn_rate(struct timeval *nowP);
 int main( int argc, char *argv[])
 {
     /* Parse args. */
-    int opt, rate;
+    int opt;
     char *url_file;
     if (argc != 5)
         usage();
@@ -78,6 +89,14 @@ int main( int argc, char *argv[])
         switch (opt) {
         case 'r':
             rate = atoi(optarg);
+            if (rate > 30000) {
+                fprintf(stderr, "rate must be at most 30000\n");
+                exit(1);
+            }
+            if (rate < 1) {
+                fprintf(stderr, "rate must be at least 1\n");
+                exit(1);
+            }
             break;
         case 'u':
             url_file = optarg;
@@ -87,17 +106,69 @@ int main( int argc, char *argv[])
         }
     }
 
-    int cnum;
+    int cnum, flags;
+    Timer *t;
     struct timeval now, timeout;
-    int i, r, n;
+    int r;
     fd_set rfdset, wfdset;
+#ifdef RLIMIT_NOFILE
+    struct rlimit limits;
+#endif /* RLIMIT_NOFILE */
+    int ch;
+
     read_url_file( url_file );
 
+    /* Initialize curses */
+    initscr();
+    start_color();
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+
+    /* Initialize all the colors */
+    init_pair(1, COLOR_RED, COLOR_BLACK);
+    init_pair(2, COLOR_GREEN, COLOR_BLACK);
+    init_pair(3, COLOR_BLUE, COLOR_BLACK);
+    init_pair(4, COLOR_CYAN, COLOR_BLACK);
+
+    init_wins();
+
+    /* Attach a panel to each window */
+    info_panel = new_panel(info_win);
+    edit_panel = new_panel(edit_win);
+
+    /* Set up the user pointers to the next panel */
+    set_panel_userptr(info_panel, edit_panel);
+    set_panel_userptr(edit_panel, info_panel);
+
+    /* Update the stacking order. */
+    update_panels();
+
+    /* Show it on the screen */
+    attron(COLOR_PAIR(4));
+
     /* Initialize the connections table */
-    max_conns = 512 - RESERVED_FDS;
+    max_conns = 1024 - RESERVED_FDS;
+#ifdef RLIMIT_NOFILE
+    /* Try and increase the limit on # of files to the maximum. */
+    if ( getrlimit( RLIMIT_NOFILE, &limits ) == 0 )
+	{
+            if ( limits.rlim_cur != limits.rlim_max )
+                {
+                    if ( limits.rlim_max == RLIM_INFINITY )
+                        limits.rlim_cur = 8192;		/* arbitrary */
+                    else if ( limits.rlim_max > limits.rlim_cur )
+                        limits.rlim_cur = limits.rlim_max;
+                    (void) setrlimit( RLIMIT_NOFILE, &limits );
+                }
+            max_conns = limits.rlim_cur - RESERVED_FDS;
+	}
+#endif /* RLIMIT_NOFILE */
     connections = (connection *) malloc(max_conns * sizeof(connection));
     for (cnum = 0; cnum < max_conns; cnum++)
         connections[cnum].conn_state = CNST_FREE;
+
+
 
     /* Initialize the statistics */
     cur_conns = max_para = 0;
@@ -111,10 +182,58 @@ int main( int argc, char *argv[])
     tmr_create(&now, show_conn_rate, RATE_SHOW_SECS * 1000000L, 1);
 
     start_interval = 1000000L / rate;
-    tmr_create(&now, start_connection, start_interval, 1);
-    
+    t = tmr_create(&now, start_connection, start_interval, 1);
+
+    top_panel(info_panel);
+    update_panels();
+    doupdate();
+    signal(SIGINT,sig_handler);
+
+    /* Set the file descriptor stdin to non-block mode. */
+    flags = fcntl(0, F_GETFL, 0);
+    if (flags == -1) {
+        perror("Set stdin to non-block error");
+        return 1;
+    }
+    if (fcntl(0, F_SETFL, flags | O_NONBLOCK) < 0) {
+        perror("Set stdin to non-block error");
+        return 1;
+    }
+    mode = INFO_MODE;
     /* Main loop */
     while(1) {
+        if (mode == INFO_MODE) {
+            cbreak();
+            if ((ch = getchar()) == 'c') {
+                mode = EDIT_MODE;
+                mvwprintw(edit_win, 4, 2, "rate: ");
+                top_panel(edit_panel);
+                update_panels();
+                doupdate();
+            }
+        }
+        if (mode == EDIT_MODE) {
+            /* if ((ch = getchar()) == 'c') { */
+            nocbreak();
+            if (scanf("%d", &rate) == 1) {
+                if (rate > 30000) {
+                    fprintf(stderr, "rate must be at most 30000\n");
+                    exit(1);
+                }
+                if (rate < 1) {
+                    fprintf(stderr, "rate must be at least 1\n");
+                    exit(1);
+                }
+                start_interval = 1000000L / rate;
+                t->msecs = start_interval;
+                gettimeofday(&now, NULL);
+                tmr_reset(&now, t);
+                mode = INFO_MODE;
+                top_panel(info_panel);
+                update_panels();
+                doupdate();
+            }
+        }
         /* Build the fdsets. */
         FD_ZERO(&rfdset);
         FD_ZERO(&wfdset);
@@ -136,7 +255,7 @@ int main( int argc, char *argv[])
         timeout.tv_usec = 1000;
         r = select(maxfd, &rfdset, &wfdset, NULL, &timeout);
         if(r<0) {
-            perror("select");
+            perror("select here");
             exit(1);
         }
         gettimeofday(&now, NULL);
@@ -160,7 +279,9 @@ int main( int argc, char *argv[])
 
 static void usage()
 {
-    printf("example: httptest -r 32 -u url_file\n");
+    printf("usage: httptest -r N -u URL_FILE\n\
+for example: ./httptest -r 2000 -u urls\n");
+    exit(0);
 }
 
 static void read_url_file(char *url_file)
@@ -243,13 +364,52 @@ static void sig_handler(int sig)
         free(urls);
         free(connections);
         tmr_destroy();
+        endwin();
+        printf("maximum connections in parallel: %d\n", max_para);
         exit(0);
     }
 }
 
+static void init_wins()
+{
+    char label[] = "httptest";
+    int x, y;
+    if (LINES <= NLINES) {
+        perror("Terminal too small");
+        exit(1);
+    }
+    y = (LINES - NLINES) / 2;
+    x = (COLS - NCOLS) / 2;
+    info_win = newwin(NLINES, NCOLS, y, x);
+    win_show(info_win, label);
+    edit_win = newwin(NLINES, NCOLS, y, x);
+    win_show(edit_win, label);
+}
+
+static void win_show(WINDOW *win, char *label)
+{
+    int x, height, width, length;
+    float temp;
+
+    getmaxyx(win, height, width);
+
+    box(win, 0, 0);
+    mvwaddch(win, 2, 0, ACS_LTEE);
+    mvwhline(win, 2, 1, ACS_HLINE, width - 2);
+    mvwaddch(win, 2, width - 1, ACS_RTEE);
+
+    length = strlen(label);
+    temp = (width - length)/ 2;
+    x = (int)temp;
+    wattron(win, COLOR_PAIR(1));
+    mvwprintw(win, 1, x, "%s", label);
+    wattroff(win, COLOR_PAIR(1));
+    refresh();
+}
+
 static void start_connection(struct timeval *nowP)
 {
-    int cnum, url_num;
+    int cnum;
 
     for(cnum = 0; cnum < max_conns; ++cnum)
         if (connections[cnum].conn_state == CNST_FREE) {
@@ -392,15 +552,31 @@ static void close_connection(int cnum)
 
 static void print_statistics(struct timeval *nowP)
 {
-    printf("Current connections: %d\n", cur_conns);
-    printf("Total connections:%d\n", total_conns_start);
-    printf("Succeeded connections: %d\n", succeeded_conns);
-    printf("Failed connections: %d\n\n", failed_conns);
+    if (mode == INFO_MODE) {
+        mvwprintw(info_win, 3, 1,
+                  "Current connections: %d", cur_conns);
+        mvwprintw(info_win, 4, 1,
+                  "Total connections: %d", total_conns_start);
+        mvwprintw(info_win, 5, 1,
+                  "Succeeded connections: %d", succeeded_conns);
+        mvwprintw(info_win, 6, 1,
+                  "Failed connections: %d", failed_conns);
+
+        refresh();
+        update_panels();
+        doupdate();
+    }
 }
 
 static void show_conn_rate(struct timeval *nowP)
 {
-    printf( "\nFor the past 5s, connection rate is %d/s\n\n",
-           (total_conns_start - total_conns_start_old) / 5 );
-    total_conns_start_old = total_conns_start;
+    if (mode == INFO_MODE) {
+        mvwprintw(info_win, 8, 1, "For the past 5s, connection rate is %d/s",
+                  (total_conns_start - total_conns_start_old) / 5 );
+        mvwprintw(info_win, 9, 1, "expected rate: %d", rate);        
+        refresh();
+        update_panels();
+        doupdate();
+        total_conns_start_old = total_conns_start;
+    }
 }
