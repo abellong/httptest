@@ -1,0 +1,89 @@
+.TH httptest 1 "27 January 2013"
+.SH NAME
+httptest - multiprocessing http test client
+.SH SYNOPSIS
+.B httptest
+.RI -r
+.IR N
+.RI -u
+.IR url_file
+.SH DESCRIPTION
+.PP
+.I httptest
+runs multiple http fetces in parallel, to test how many connections 
+a web server can handle per second. 
+.I httptest
+uses the HTTP HEAD method to connect to a server. If the client receive
+200 code, it succeeds.
+.PP
+-r tells httptest to start that many new connections each second.
+.PP
+-u tells httptest to read urls from url_file. The file contains just 
+one line specifying a url. httptest will make its best effort to 
+start connections at that rate, but may not succeed.
+.PP
+Sample run:
+.nf
+     % ./httptest -rate 300 -u urls
+.fi
+The connection status will be shown on a ncurses window. They are explained
+here.
+.PP
+.B Current connections
+The client has executed the connect function but haven't received
+responses from the server.
+.PP
+.B Total connections
+total connections shows the number of connections 
+.I httptest
+has started since the program started. Please 
+.B NOTE
+that the value might overflow. It is for your reference only.
+.PP
+.B Succeeded connections
+This shows the number of connections that the client has receive '200 OK'
+code.
+.PP
+.B Failed connections
+This shows the number of connections that the client doesn't receive '200 
+OK' code, for various reasons.
+.PP 
+.B Success rate 
+(Succeeded connections)/(Succeeded connections + Failed connections) * 100%.
+.PP
+httptest also shows the connection rate every 5 seconds. Ideally it equals 
+to the desired connect rate which is specified using the -r option. However,
+it doesn't happen always especially when you specify a very large rate. The 
+performance of the server greatly affects the result.
+.PP
+You can change the 'desired rate' when 
+.I httptest
+is running. Press 'c' to enter the so called EDIT_MODE, then input an integer 
+to specify the new rate. 
+.I httptest
+will try its best to operate at that new rate.
+.SH "SEE ALSO"
+http_load(1)
+.SH AUTHOR
+Copyright 2013 by Yongbiao Long <longyongbiao@gmail.com>.
+All rights reserved.
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.

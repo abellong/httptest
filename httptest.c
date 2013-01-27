@@ -5,8 +5,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <getopt.h>
-#include <sys/types.h>
+#include <time.h>
 #include <sys/time.h>
+#include <sys/types.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -55,6 +56,7 @@ typedef struct {
 /* cur_conns: number of conn kept currently */
 /* max_para: maximum number of conns in fact  */
 static int rate;
+static FILE *log;
 static connection* connections; /* need free */
 static int max_conns, cur_conns, max_para;
 static int total_conns_start, total_conns_start_old;
@@ -83,6 +85,7 @@ int main( int argc, char *argv[])
     /* Parse args. */
     int opt;
     char *url_file;
+    log = fopen("httptest.log", "w");
     if (argc != 5)
         usage();
     while ( (opt = getopt(argc, argv, "r:u:")) != -1) {
@@ -90,11 +93,11 @@ int main( int argc, char *argv[])
         case 'r':
             rate = atoi(optarg);
             if (rate > 30000) {
-                fprintf(stderr, "rate must be at most 30000\n");
+                fprintf(log, "Error: rate must be at most 30000\n");
                 exit(1);
             }
             if (rate < 1) {
-                fprintf(stderr, "rate must be at least 1\n");
+                fprintf(log, "Error: rate must be at least 1\n");
                 exit(1);
             }
             break;
@@ -116,8 +119,6 @@ int main( int argc, char *argv[])
 #endif /* RLIMIT_NOFILE */
     int ch;
 
-    read_url_file( url_file );
-
     /* Initialize curses */
     initscr();
     start_color();
@@ -132,6 +133,8 @@ int main( int argc, char *argv[])
     init_pair(4, COLOR_CYAN, COLOR_BLACK);
 
     init_wins();
+    
+    read_url_file( url_file );
 
     /* Attach a panel to each window */
     info_panel = new_panel(info_win);
@@ -192,11 +195,13 @@ int main( int argc, char *argv[])
     /* Set the file descriptor stdin to non-block mode. */
     flags = fcntl(0, F_GETFL, 0);
     if (flags == -1) {
-        perror("Set stdin to non-block error");
+        fprintf( log, "Set stdin to non-block error: %s\n", strerror(errno) );
+        /* perror("Set stdin to non-block error"); */
         return 1;
     }
     if (fcntl(0, F_SETFL, flags | O_NONBLOCK) < 0) {
-        perror("Set stdin to non-block error");
+        fprintf(log, "Set stdin to non-block error: %s\n", strerror(errno));
+        /* perror("Set stdin to non-block error"); */
         return 1;
     }
     mode = INFO_MODE;
@@ -206,7 +211,10 @@ int main( int argc, char *argv[])
             cbreak();
             if ((ch = getchar()) == 'c') {
                 mode = EDIT_MODE;
-                mvwprintw(edit_win, 4, 2, "rate: ");
+                mvwprintw(edit_win, 4, 4, "Change the desired connect rate");
+                mvwprintw(edit_win, 7, 6, "Please input an integer more than 1 and less than 30000.");
+                mvwprintw(edit_win, 8, 6, "Note that the number you input will not be echoed");
+                mvwprintw(edit_win, 10, 6, "rate: ");
                 top_panel(edit_panel);
                 update_panels();
                 doupdate();
@@ -217,11 +225,11 @@ int main( int argc, char *argv[])
             nocbreak();
             if (scanf("%d", &rate) == 1) {
                 if (rate > 30000) {
-                    fprintf(stderr, "rate must be at most 30000\n");
+                    fprintf(log, "Error: rate must be at most 30000\n");
                     exit(1);
                 }
                 if (rate < 1) {
-                    fprintf(stderr, "rate must be at least 1\n");
+                    fprintf(log, "Error: rate must be at least 1\n");
                     exit(1);
                 }
                 start_interval = 1000000L / rate;
@@ -229,6 +237,8 @@ int main( int argc, char *argv[])
                 gettimeofday(&now, NULL);
                 tmr_reset(&now, t);
                 mode = INFO_MODE;
+                mvwprintw(info_win, 14, 8, "Desired connect rate: %5d/s", rate);
+                refresh();
                 top_panel(info_panel);
                 update_panels();
                 doupdate();
@@ -255,7 +265,8 @@ int main( int argc, char *argv[])
         timeout.tv_usec = 1000;
         r = select(maxfd, &rfdset, &wfdset, NULL, &timeout);
         if(r<0) {
-            perror("select here");
+            fprintf(log, "select error: %s\n", strerror(errno));
+            /* perror("select here"); */
             exit(1);
         }
         gettimeofday(&now, NULL);
@@ -292,22 +303,29 @@ static void read_url_file(char *url_file)
     char *http = "http://";
     int http_len = strlen(http);
     int host_len;
-    int n;
+    int n,tmp;
     char *cp;
     struct addrinfo hint, *ai;
 
     fp = fopen(url_file, "r");
     if (fp == (FILE*) 0) {
-        perror(url_file);
+        fprintf(log, "%s: %s\n", url_file, strerror(errno));
+        /* perror(url_file); */
         exit(1);
     }
     if ( (fgets (line, sizeof(line), fp)) == (char*) 0 ) {
-        perror("file is empty");
+        fprintf(log, "file is empty: %s\n", strerror(errno));
+        /* perror("file is empty"); */
         exit(1);
     }
     
     if ( line[strlen( line ) - 1] == '\n' )
         line[strlen( line ) - 1] = '\0';
+    if ( (tmp = COLS-strlen(line)-15) > 1 ) 
+    mvwprintw(info_win, 3, tmp, "url: %s", line);
+    else
+        mvwprintw(info_win, 3, COLS - strlen("......") - 15, "url: %s", "......");
+    refresh();
 
     urls = (url*) malloc(sizeof(url));
 
@@ -338,7 +356,7 @@ static void read_url_file(char *url_file)
     (void) snprintf( portstr, sizeof(portstr), "%d", (int) urls->port );
     if ( (n = getaddrinfo(hostname, portstr, &hint, &ai)) != 0) {
         (void) fprintf(
-                       stderr, "httptest: getaddrinfo %s - %s\n", hostname,
+                       log, "httptest: getaddrinfo %s - %s\n", hostname,
                        gai_strerror( n ) );
 	exit( 1 );
     }
@@ -365,7 +383,8 @@ static void sig_handler(int sig)
         free(connections);
         tmr_destroy();
         endwin();
-        printf("maximum connections in parallel: %d\n", max_para);
+        fclose(log);
+        printf("maximum connections in parallel: %5d\n", max_para);
         exit(0);
     }
 }
@@ -375,7 +394,7 @@ static void init_wins()
     char label[] = "httptest";
     int x, y;
     if (LINES <= NLINES) {
-        perror("Terminal too small");
+        fprintf(log, "Terminal too small\n");
         exit(1);
     }
     y = (LINES - NLINES) / 2;
@@ -394,17 +413,85 @@ static void win_show(WINDOW *win, char *label)
     getmaxyx(win, height, width);
 
     box(win, 0, 0);
-    mvwaddch(win, 2, 0, ACS_LTEE);
-    mvwhline(win, 2, 1, ACS_HLINE, width - 2);
-    mvwaddch(win, 2, width - 1, ACS_RTEE);
+    /* mvwaddch(win, 2, 0, ACS_LTEE); */
+    /* mvwhline(win, 2, 1, ACS_HLINE, width - 2); */
+    /* mvwaddch(win, 2, width - 1, ACS_RTEE); */
 
     length = strlen(label);
     temp = (width - length)/ 2;
     x = (int)temp;
-    wattron(win, COLOR_PAIR(1));
+    wattron(win, COLOR_PAIR(2));
     mvwprintw(win, 1, x, "%s", label);
     wattroff(win, COLOR_PAIR(1));
-    refresh();
+    if (win == info_win) {
+        mvwprintw(info_win, 4, 4, "Connect status");
+        mvwprintw(info_win, 6, 8,
+                  "Current connections: %5d", cur_conns);
+        mvwprintw(info_win, 7, 8,
+                  "Total connections: %5d", total_conns_start);
+        mvwprintw(info_win, 8, 8,
+                  "Succeeded connections: %5d", succeeded_conns);
+        mvwprintw(info_win, 9, 8,
+                  "Failed connections: %5d", failed_conns);
+        mvwprintw(info_win, 11, 8,
+                  "Success rate:   0%%");
+
+        struct tm *local;
+        time_t t;
+        t=time(NULL);
+        local=localtime(&t);
+        mvwprintw(info_win, 13, 8,
+                  "For the past 5s, connection rate is %5d/s   (%02d:%02d:%02d)",
+                  (total_conns_start - total_conns_start_old) / 5,
+                  local->tm_hour,
+                  local->tm_min,
+                  local->tm_sec);
+        mvwprintw(info_win, 14, 8, "Desired connect rate: %5d/s", rate);
+
+        mvwprintw(info_win, 16, 4, "NOTE");
+        mvwprintw(info_win, 16, 10, "1. Please refer to the man page for the precise definitions");
+        mvwprintw(info_win, 17, 13, "of the above terms");
+        mvwprintw(info_win, 18, 10, "2. To change the desired connect rate, press 'c'");
+        refresh();
+    }
+}
+
+static void print_statistics(struct timeval *nowP)
+{
+    if (mode == INFO_MODE) {
+        mvwprintw(info_win, 6, 29, "%5d", cur_conns);
+        mvwprintw(info_win, 7, 27, "%5d", total_conns_start);
+        mvwprintw(info_win, 8, 31, "%5d", succeeded_conns);
+        mvwprintw(info_win, 9, 28, "%5d", failed_conns);
+        if (succeeded_conns||failed_conns)
+            mvwprintw(info_win, 11, 22, "%5d%%",
+                      100*succeeded_conns/(succeeded_conns+failed_conns));
+
+        refresh();
+        update_panels();
+        doupdate();
+    }
+}
+
+static void show_conn_rate(struct timeval *nowP)
+{
+    if (mode == INFO_MODE) {
+        struct tm *local;
+        time_t t;
+        t=time(NULL);
+        local=localtime(&t);
+        mvwprintw(info_win, 13, 8,
+                  "For the past 5s, connection rate is %5d/s   (%02d:%02d:%02d)",
+                  (total_conns_start - total_conns_start_old) / 5,
+                  local->tm_hour,
+                  local->tm_min,
+                  local->tm_sec);
+        mvwprintw(info_win, 14, 8, "Desired connect rate: %5d/s", rate);        
+        refresh();
+        update_panels();
+        doupdate();
+        total_conns_start_old = total_conns_start;
+    }
 }
 
 static void start_connection(struct timeval *nowP)
@@ -423,8 +510,8 @@ static void start_connection(struct timeval *nowP)
             return;
         }
     /* No slots left */
-    fprintf(stderr, "httptest: ran out of connection slots\n");
-    exit(0);
+    fprintf(log, "httptest: ran out of connection slots\n");
+    exit(1);
 }
 
 static void start_socket(int cnum, struct timeval *nowP)
@@ -435,20 +522,23 @@ static void start_socket(int cnum, struct timeval *nowP)
                                        urls->sock_type,
                                        urls->sock_protocol);
     if(connections[cnum].conn_fd < 0) {
-        perror("url: create socket error");
+        fprintf(log, "url: create socket error: %s\n", strerror(errno));
+        /* perror("url: create socket error"); */
         return;
     }
 
     /* Set the file descriptor to non-block mode. */
     flags = fcntl(connections[cnum].conn_fd, F_GETFL, 0);
     if (flags == -1) {
-        perror("Set fd to non-block error");
+        fprintf(log, "Set fd to non-block error: %s\n", strerror(errno));
+        /* perror("Set fd to non-block error"); */
         close(connections[cnum].conn_fd);
         return;
     }
     if (fcntl(connections[cnum].conn_fd,
               F_SETFL, flags | O_NONBLOCK) < 0) {
-        perror("Set fd to non-block error");
+        fprintf(log, "Set fd to non-block error: %s\n", strerror(errno));
+        /* perror("Set fd to non-block error"); */
         close (connections[cnum].conn_fd);
         return;
     }
@@ -465,7 +555,8 @@ static void start_socket(int cnum, struct timeval *nowP)
             return;
         }
         else {
-            perror ("connect error");
+            fprintf(log, "connect error: %s\n", strerror(errno));
+            /* perror ("connect error"); */
             close(connections[cnum].conn_fd);
             failed_conns++;
             return;
@@ -495,9 +586,9 @@ static void handle_connect(int cnum, struct timeval *nowP, int double_check)
                 if ( getsockopt( connections[cnum].conn_fd,
                                  SOL_SOCKET, SO_ERROR,
                                  (void*) &err, &errlen ) < 0 )
-                    fprintf(stderr, "connect error\n");
+                    fprintf(log, "connect error\n");
                 else
-                    fprintf(stderr, "connect error: %s\n", strerror(err));
+                    fprintf(log, "connect error: %s\n", strerror(err));
                 close_connection(cnum);
                 failed_conns++;
                 return;
@@ -511,7 +602,8 @@ static void handle_connect(int cnum, struct timeval *nowP, int double_check)
     /* Send the request */
     r = write(connections[cnum].conn_fd, buf, bytes);
     if (r < 0) {
-        perror("Send the HEAD request error");
+        fprintf(log, "Send HEAD request error: %s\n", strerror(errno));
+        /* perror("Send the HEAD request error"); */
         close_connection(cnum);
         failed_conns++;
         return;
@@ -550,33 +642,3 @@ static void close_connection(int cnum)
     --cur_conns;
 }
 
-static void print_statistics(struct timeval *nowP)
-{
-    if (mode == INFO_MODE) {
-        mvwprintw(info_win, 3, 1,
-                  "Current connections: %d", cur_conns);
-        mvwprintw(info_win, 4, 1,
-                  "Total connections: %d", total_conns_start);
-        mvwprintw(info_win, 5, 1,
-                  "Succeeded connections: %d", succeeded_conns);
-        mvwprintw(info_win, 6, 1,
-                  "Failed connections: %d", failed_conns);
-
-        refresh();
-        update_panels();
-        doupdate();
-    }
-}
-
-static void show_conn_rate(struct timeval *nowP)
-{
-    if (mode == INFO_MODE) {
-        mvwprintw(info_win, 8, 1, "For the past 5s, connection rate is %d/s",
-                  (total_conns_start - total_conns_start_old) / 5 );
-        mvwprintw(info_win, 9, 1, "expected rate: %d", rate);        
-        refresh();
-        update_panels();
-        doupdate();
-        total_conns_start_old = total_conns_start;
-    }
-}
