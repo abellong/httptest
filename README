@@ -1,0 +1,26 @@
+          httptest - a simple http test client
+                   version of 27Jan2013
+
+httptest runs multiple http fetces in parallel, to test how many 
+connections a web server can handle per second. 
+
+See the manual entry for more details such us usage.
+
+Files in this distribution:
+
+      README                    this    
+      Makefile          
+      httptest.c                sourse file
+      httptest.1                manual entry
+      timers.c                  timers package
+      timers.h                  headers for timers package
+      httptest_report.md        a simple test report on my machine
+      httptest_report.html      exported from httptest_report.md
+
+To build, just run:
+     make
+     make install
+It will install httptest in /usr/local/bin. Or you can just make and run
+the software in the current directory.
+
+   Yongbiao Long   longyongbiao@gmail.com
